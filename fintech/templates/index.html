@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinWallet</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --ink:#1d2433; --muted:#6b7385; --acc:#1f5eff; --err:#c62828; --ok:#2e7d32; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--ink); color:#fff; padding:14px 24px; font-weight:600; }
+  main { max-width:960px; margin:24px auto; padding:0 16px; display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); }
+  section { background:var(--card); border-radius:10px; padding:16px 18px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  h2 { margin:0 0 10px; font-size:16px; }
+  input, select, button { width:100%; padding:8px 10px; margin:4px 0; border:1px solid #ccd; border-radius:6px; font:inherit; }
+  button { background:var(--acc); color:#fff; border:0; cursor:pointer; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { padding:4px 6px; border-bottom:1px solid #eee; text-align:right; }
+  td:first-child, th:first-child { text-align:left; }
+  #msg { grid-column:1/-1; min-height:20px; }
+  .err { color:var(--err); } .ok { color:var(--ok); }
+  .wide { grid-column:1/-1; }
+</style>
+</head>
+<body>
+<header>FinWallet — учебный электронный кошелёк</header>
+<main>
+  <div id="msg"></div>
+  <section>
+    <h2>Вход / регистрация</h2>
+    <input id="login" placeholder="Логин" autocomplete="username">
+    <input id="fullname" placeholder="ФИО (для регистрации)">
+    <input id="password" type="password" placeholder="Пароль (от 8 символов)" autocomplete="current-password">
+    <button onclick="reg()">Зарегистрироваться</button>
+    <button onclick="signIn()">Войти</button>
+  </section>
+  <section>
+    <h2>Мои счета</h2>
+    <button onclick="openAcc()">Открыть счёт</button>
+    <table><thead><tr><th>Счёт</th><th>Баланс, ₽</th></tr></thead><tbody id="accs"></tbody></table>
+  </section>
+  <section>
+    <h2>Операция</h2>
+    <select id="op"><option value="deposit">Пополнение</option><option value="withdraw">Снятие</option><option value="transfer">Перевод</option></select>
+    <input id="src" placeholder="Номер счёта">
+    <input id="dst" placeholder="Счёт получателя (для перевода)">
+    <input id="amount" placeholder="Сумма, ₽" inputmode="decimal">
+    <button onclick="operate()">Выполнить</button>
+  </section>
+  <section class="wide">
+    <h2>Кредитный калькулятор</h2>
+    <div style="display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+      <input id="lamount" placeholder="Сумма, ₽" value="500000">
+      <input id="lrate" placeholder="Ставка, % год." value="18">
+      <input id="lmonths" placeholder="Срок, мес." value="12">
+      <select id="lkind"><option value="annuity">Аннуитетный</option><option value="differentiated">Дифференцированный</option></select>
+      <button onclick="loan()">Рассчитать</button>
+    </div>
+    <p id="lsum"></p>
+    <table><thead><tr><th>№</th><th>Платёж</th><th>Осн. долг</th><th>Проценты</th><th>Остаток</th></tr></thead><tbody id="sched"></tbody></table>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+function say(text, ok) { const m = $('msg'); m.textContent = text; m.className = ok ? 'ok' : 'err'; }
+async function api(method, url, data) {
+  const opt = { method, headers: { 'Content-Type': 'application/json' } };
+  if (method !== 'GET') opt.headers['Idempotency-Key'] = crypto.randomUUID();
+  if (data) opt.body = JSON.stringify(data);
+  const r = await fetch(url, opt); const j = await r.json();
+  if (!r.ok && r.status !== 202) throw new Error(j.error || j.reason || r.status);
+  return j;
+}
+function row(cells) { const tr = document.createElement('tr'); cells.forEach(c => { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }); return tr; }
+async function reg() { try { await api('POST','/api/register',{login:$('login').value, full_name:$('fullname').value, password:$('password').value}); say('Регистрация выполнена, войдите', true);} catch(e){ say(e.message);} }
+async function signIn() { try { await api('POST','/api/login',{login:$('login').value, password:$('password').value}); say('Вход выполнен', true); refresh(); } catch(e){ say(e.message);} }
+async function openAcc() { try { const j = await api('POST','/api/accounts'); say('Открыт счёт '+j.number, true); refresh(); } catch(e){ say(e.message);} }
+async function refresh() { const list = await api('GET','/api/accounts'); const tb = $('accs'); tb.replaceChildren(...list.map(a => row([a.number, a.balance]))); }
+async function operate() {
+  const op = $('op').value, src = $('src').value.trim(), amount = $('amount').value;
+  try {
+    const j = op === 'transfer' ? await api('POST','/api/transfers',{from:src, to:$('dst').value.trim(), amount})
+                                : await api('POST',`/api/accounts/${encodeURIComponent(src)}/${op}`,{amount});
+    say(`Операция №${j.tx_id}: ${j.status}${j.reason ? ' — '+j.reason : ''}`, j.status === 'DONE'); refresh();
+  } catch(e){ say(e.message); }
+}
+async function loan() {
+  const q = new URLSearchParams({amount:$('lamount').value, rate:$('lrate').value, months:$('lmonths').value, kind:$('lkind').value});
+  try { const j = await api('GET','/api/loan?'+q); $('lsum').textContent = `Всего выплат: ${j.total} ₽, переплата: ${j.overpayment} ₽`;
+        $('sched').replaceChildren(...j.payments.map(p => row([p.n, p.payment, p.principal, p.interest, p.balance]))); } catch(e){ say(e.message); }
+}
+</script>
+</body>
+</html>
